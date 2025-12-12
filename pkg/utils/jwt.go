@@ -5,6 +5,6 @@ import (
 	models "gossip/internal/user/model"
 )
 
-func GenerateJWTToken(user *models.User, config config.Config) (token, refreshToken string, err error) {
-	return "", "", nil
+func GenerateJWTToken(user *models.User, config config.Config) (token string, err error) {
+	return "", nil
 }

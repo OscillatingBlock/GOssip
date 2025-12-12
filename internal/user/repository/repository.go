@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	User "gossip/internal/user/model"
 	models "gossip/internal/user/model"
@@ -19,8 +20,10 @@ type UserRepository struct {
 }
 
 var (
-	ErrNoPreKeysAvailable = errors.New("no one-time prekeys available")
-	ErrUserNotFound       = errors.New("user not found")
+	ErrNoPreKeysAvailable   = errors.New("no one-time prekeys available")
+	ErrUserNotFound         = errors.New("user not found")
+	ErrIdentityKeyNotFound  = errors.New("identity key not found")
+	ErrSignedPreKeyNotFound = errors.New("signed prekey not found")
 )
 
 func NewUserRepository(db *bun.DB, logger logger.Logger) *UserRepository {
@@ -34,7 +37,7 @@ func (r *UserRepository) CreateUser(ctx context.Context, user *User.User) error 
 
 	_, err := r.db.NewInsert().Model(user).Returning("*").Exec(ctx)
 	if err != nil {
-		return errors.Wrap(err, "authRepo.CreateUser.InsertUser: ")
+		return errors.New("failed to create user")
 	}
 	return nil
 }
@@ -44,7 +47,10 @@ func (r *UserRepository) GetUserByID(ctx context.Context, id uuid.UUID) (*User.U
 	user := new(User.User)
 	err := r.db.NewSelect().Model(user).Where("id = ?", id).Scan(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "authRepo.GetUserByID.Scan: ")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf("get user by id failed: %w", err)
 	}
 	return user, nil
 }
@@ -54,7 +60,10 @@ func (r *UserRepository) GetUserByUsername(ctx context.Context, username string)
 	user := new(User.User)
 	err := r.db.NewSelect().Model(user).Where("username = ?", username).Scan(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "authRepo.GetUserByID.Scan: ")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf("get user by username failed: %w", err)
 	}
 	return user, nil
 }
@@ -62,7 +71,10 @@ func (r *UserRepository) GetUserByUsername(ctx context.Context, username string)
 func (r *UserRepository) UpdateUserDisplayName(ctx context.Context, userID uuid.UUID, newName string) error {
 	_, err := r.db.NewUpdate().Model((*User.User)(nil)).Set("name = ?", newName).Where("id = ?", userID).Exec(ctx)
 	if err != nil {
-		return errors.Wrap(err, "authRepo.UpdateUserDisplayName.Update: ")
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrUserNotFound
+		}
+		return fmt.Errorf("user not updated: %w", err)
 	}
 	return nil
 }
@@ -71,7 +83,10 @@ func (r *UserRepository) SaveIdentityKey(ctx context.Context, key *User.Identity
 
 	_, err := r.db.NewInsert().Model(key).Returning("*").Exec(ctx)
 	if err != nil {
-		return errors.Wrap(err, "authRepo.SaveIdentityKey.Exec: ")
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrUserNotFound
+		}
+		return fmt.Errorf("failed to save identity key: %w", err)
 	}
 	return nil
 }
@@ -81,7 +96,10 @@ func (r *UserRepository) GetIdentityKey(ctx context.Context, userID uuid.UUID) (
 	identityKey := new(User.IdentityKey)
 	err := r.db.NewSelect().Model(identityKey).Where("user_id = ?", userID).Scan(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "authRepo.GetIdentityKey.Scan: ")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf("identity key not found: %w", err)
 	}
 	return identityKey, nil
 }
@@ -99,9 +117,9 @@ func (r *UserRepository) GetIdentityKeyByUsername(ctx context.Context, username 
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrUserNotFound
+			return nil, ErrIdentityKeyNotFound
 		}
-		return nil, errors.Wrap(err, "authRepo.GetIdentityKey.Scan")
+		return nil, fmt.Errorf("get identity key by username failed: %w", err)
 	}
 	return key, nil
 }
@@ -119,7 +137,7 @@ func (r *UserRepository) UpsertSignedPreKey(ctx context.Context, spk *User.Signe
 		Exec(ctx)
 
 	if err != nil {
-		return errors.Wrap(err, "authRepo.UpsertSignedPreKey.Exec: ")
+		return fmt.Errorf("upsert singed pre key failed: %w", err)
 	}
 	return nil
 }
@@ -128,15 +146,24 @@ func (r *UserRepository) GetSignedPreKey(ctx context.Context, userID uuid.UUID) 
 	key := new(User.SignedPreKey)
 	err := r.db.NewSelect().Model(key).Where("user_id = ?", userID).Scan(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "authRepo.GetSignedPreKey.Scan: ")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrSignedPreKeyNotFound
+		}
+		return nil, fmt.Errorf("signed prekey not found: %w", err)
 	}
 	return key, nil
 }
 
 func (r *UserRepository) UploadOneTimePreKeys(ctx context.Context, userID uuid.UUID, keys []User.OneTimePreKey) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	for i := range keys {
+		keys[i].UserID = userID
+	}
 	_, err := r.db.NewInsert().Model(&keys).Returning("*").Exec(ctx)
 	if err != nil {
-		return errors.Wrap(err, "authRepo.UploadOneTimePreKeys.Insert: ")
+		return fmt.Errorf("upload otpks failed: %w", err)
 	}
 	return nil
 
@@ -161,7 +188,10 @@ func (r *UserRepository) ClaimOneTimePreKey(ctx context.Context, userID uuid.UUI
 		Scan(ctx)
 
 	if err != nil && err == sql.ErrNoRows {
-		return nil, errors.Wrap(err, "failed to find unused prekey")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNoPreKeysAvailable
+		}
+		return nil, fmt.Errorf("one time pre keys not found: %w", err)
 	}
 
 	_, err = tx.NewUpdate().
@@ -169,23 +199,22 @@ func (r *UserRepository) ClaimOneTimePreKey(ctx context.Context, userID uuid.UUI
 		Set("used = ?", true).
 		WherePK().
 		Exec(ctx)
-
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to mark prekey as used")
+		return nil, fmt.Errorf("mark otpks failed: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	key.Used = true
 
+	key.Used = true
 	return key, nil
 }
 
 func (r *UserRepository) CountRemainingOneTimePreKeys(ctx context.Context, userID uuid.UUID) (int, error) {
 	count, err := r.db.NewSelect().Model((*User.OneTimePreKey)(nil)).Where("used = false AND user_id = ?", userID).Count(ctx)
 	if err != nil {
-		return 0, errors.Wrap(err, "authRepo.CountRemainingOneTimePreKeys.Scan: ")
+		return 0, fmt.Errorf("count one-time prekeys failed: %w", err)
 	}
 	return count, nil
 }
@@ -234,49 +263,54 @@ func (r *UserRepository) FetchPreKeyBundle(ctx context.Context, userID uuid.UUID
 
 		err := tx.NewSelect().Model(&ik).Where("user_id = ?", userID).Scan(ctx)
 		if err != nil {
-			return errors.Wrap(err, "error while getting identity key")
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrIdentityKeyNotFound
+			}
+			return fmt.Errorf("identity key: %w", err)
 		}
 
 		err = tx.NewSelect().Model(&spk).Where("user_id = ?", userID).Scan(ctx)
 		if err != nil {
-			return errors.New("signed prekey not found")
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSignedPreKeyNotFound
+			}
+			return fmt.Errorf("signed prekey: %w", err)
 		}
 
 		otpk := User.OneTimePreKey{}
-
 		err = tx.NewSelect().
 			Model(&otpk).
 			Where("user_id = ? AND used = ?", userID, false).
 			Limit(1).
 			For("UPDATE SKIP LOCKED").
 			Scan(ctx)
-
 		if err != nil && err == sql.ErrNoRows {
-			return errors.Wrap(err, "failed to find unused prekey")
+			return fmt.Errorf("otpk select: %w", err)
 		}
 
-		_, err = tx.NewUpdate().
-			Model(&otpk).
-			Set("used = ?", true).
-			Where("key_id = ? AND used = ?", otpk.KeyID, false).
-			Exec(ctx)
-
-		if err != nil {
-			return errors.Wrap(err, "failed to mark prekey as used")
+		if err == nil {
+			_, err = tx.NewUpdate().
+				Model(&otpk).
+				Set("used = true").
+				Where("id = ?", otpk.ID).
+				Exec(ctx)
+			if err != nil {
+				return fmt.Errorf("mark otpk used: %w", err)
+			}
+			bundle.OneTimePreKey = otpk.PublicKey
+			bundle.OneTimePreKeyID = &otpk.KeyID
 		}
 
 		bundle.IdentityKey = ik.EncryptionPublicKey
 		bundle.SignedPreKey = spk.PublicKey
 		bundle.SignedPreKeyID = spk.KeyID
 		bundle.SignedPreKeySig = spk.Signature
-		bundle.OneTimePreKey = otpk.PublicKey
-		bundle.OneTimePreKeyID = &otpk.KeyID
 
 		return nil
 	})
 
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if err == ErrIdentityKeyNotFound || err == ErrSignedPreKeyNotFound {
 			return nil, ErrUserNotFound
 		}
 		return nil, err
@@ -285,81 +319,81 @@ func (r *UserRepository) FetchPreKeyBundle(ctx context.Context, userID uuid.UUID
 	return &bundle, nil
 }
 
-func (r *UserRepository) FetchPreKeyBundleByUsername(ctx context.Context, username string) (*User.PreKeyBundle, error) {
+func (r *UserRepository) FetchPreKeyBundleByUsername(
+	ctx context.Context,
+	username string,
+) (*User.PreKeyBundle, error) {
 	var bundle User.PreKeyBundle
-
 	err := r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
-		var user models.User
-
-		err := tx.NewSelect().Model(&user).Where("username = ?", username).Scan(ctx)
-		userID := user.ID
-
+		// Use JOIN to get user + keys in one go
 		var ik User.IdentityKey
+		err := tx.NewSelect().
+			Model(&ik).
+			Relation("User").
+			Where("user.username = ?", username).
+			Scan(ctx)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrUserNotFound
+			}
+			return fmt.Errorf("identity key: %w", err)
+		}
+
 		var spk User.SignedPreKey
-
-		err = tx.NewSelect().Model(&ik).Where("user_id = ?", userID).Scan(ctx)
-		if err != nil {
-			return errors.Wrap(err, "error while getting identity key")
+		if err := tx.NewSelect().Model(&spk).Where("user_id = ?", ik.UserID).Scan(ctx); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrSignedPreKeyNotFound
+			}
+			return fmt.Errorf("signed prekey: %w", err)
 		}
 
-		err = tx.NewSelect().Model(&spk).Where("user_id = ?", userID).Scan(ctx)
-		if err != nil {
-			return errors.New("signed prekey not found")
-		}
-
-		otpk := User.OneTimePreKey{}
-		err = tx.NewSelect().Model(otpk).Where("user_id = ?", userID).Where("used = false").Order("id ASC").Limit(1).Scan(ctx)
-
+		// Claim OTPK
+		var otpk User.OneTimePreKey
 		err = tx.NewSelect().
 			Model(&otpk).
-			Where("user_id = ? AND used = ?", userID, false).
+			Where("user_id = ? AND used = false", ik.UserID).
 			Limit(1).
 			For("UPDATE SKIP LOCKED").
 			Scan(ctx)
-
-		if err != nil && err == sql.ErrNoRows {
-			return errors.Wrap(err, "failed to find unused prekey")
+		if err == nil {
+			_, err = tx.NewUpdate().
+				Model(&otpk).
+				Set("used = true").
+				Where("id = ?", otpk.ID).
+				Exec(ctx)
+			if err != nil {
+				return fmt.Errorf("mark otpk used: %w", err)
+			}
+			bundle.OneTimePreKey = otpk.PublicKey
+			bundle.OneTimePreKeyID = &otpk.KeyID
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("otpk claim: %w", err)
 		}
 
-		_, err = tx.NewUpdate().
-			Model(&otpk).
-			Set("used = ?", true).
-			Where("key_id = ? AND used = ?", otpk.KeyID, false).
-			Exec(ctx)
-
-		if err != nil {
-			return errors.Wrap(err, "failed to mark prekey as used")
-		}
-
+		bundle.UserID = ik.UserID
 		bundle.IdentityKey = ik.EncryptionPublicKey
 		bundle.SignedPreKey = spk.PublicKey
 		bundle.SignedPreKeyID = spk.KeyID
 		bundle.SignedPreKeySig = spk.Signature
-		bundle.OneTimePreKey = otpk.PublicKey
-		bundle.OneTimePreKeyID = &otpk.KeyID
 
 		return nil
 	})
 
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrUserNotFound
-		}
 		return nil, err
 	}
-
 	return &bundle, nil
 }
 
 func (r *UserRepository) UsernameExists(ctx context.Context, username string) (bool, error) {
-	user, err := r.GetUserByUsername(ctx, username)
+	exists, err := r.db.NewSelect().
+		Model((*models.User)(nil)).
+		Where("username = ?", username).
+		Exists(ctx)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("username exists check failed: %w", err)
 	}
-	if user != nil {
-		return true, nil
-	}
-	return false, nil
+	return exists, nil
 }
 
 // TODO: write tests for this
@@ -386,18 +420,18 @@ func (r *UserRepository) RegisterUserWithKeys(
 
 		_, err = tx.NewInsert().Model(ik).Exec(ctx)
 		if err != nil {
-			return errors.Wrap(err, "register.insertIdentityKey")
+			return err
 		}
 
 		_, err = tx.NewInsert().Model(spk).Exec(ctx)
 		if err != nil {
-			return errors.Wrap(err, "register.insertSPK")
+			return fmt.Errorf("register.insertSignedPreKey: %w", err)
 		}
 
 		if len(otpks) > 0 {
 			_, err = tx.NewInsert().Model(&otpks).Exec(ctx)
 			if err != nil {
-				return errors.Wrap(err, "register.insertOTPKs")
+				return fmt.Errorf("register.insertOTPks: %w", err)
 			}
 		}
 
@@ -422,4 +456,19 @@ func (r *UserRepository) GetRefreshToken(ctx context.Context, tokenID uuid.UUID)
 		return nil, err
 	}
 	return &tokenModel, nil
+}
+
+func (r *UserRepository) SearchUsersByUsername(ctx context.Context, query string, limit int) ([]*models.User, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	var users []*models.User
+	err := r.db.NewSelect().Model(users).Where("username ILIKE ?", query+"%").Order("username ASC").Limit(limit).Scan(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("search users failed: %w", err)
+	}
+	return users, nil
 }

@@ -60,8 +60,8 @@ type PreKeyBundleDTO struct {
 }
 
 type LoginResponse struct {
-	AccessToken  string `json:"access_token"`
-	ExpiresIn    int    `json:"expires_in"`
-	TokenType    string `json:"token_type"`
-	RefreshToken string `json:"refresh_token,omitempty"`
+	AccessToken string   `json:"access_token"`
+	ExpiresIn   int      `json:"expires_in"`
+	TokenType   string   `json:"token_type"`
+	User        *UserDTO `json:"user"`
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	e "errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -57,7 +58,7 @@ func (uc *UserUsecase) Register(ctx context.Context, cmd user.RegisterCommand) (
 
 	signedPreKeyPub, err := decodeBase64(string(cmd.SignedPreKey.PublicKey), 32)
 	if err != nil {
-		return nil, errors.InvalidArg("invalid signed prekey")
+		return nil, errors.ErrInvalidSignedPreKey
 	}
 
 	if !ed25519.Verify(identityPub, signedPreKeyPub, cmd.SignedPreKey.Signature) {
@@ -74,7 +75,7 @@ func (uc *UserUsecase) Register(ctx context.Context, cmd user.RegisterCommand) (
 
 		pub, err := decodeBase64(string(k.PublicKey), 32)
 		if err != nil {
-			return nil, errors.InvalidArg("invalid one-time prekey")
+			return nil, errors.ErrInvalidOneTimePreKey
 		}
 		otpkList = append(otpkList, models.OneTimePreKey{
 			UserID:    uuid.Nil,
@@ -174,8 +175,10 @@ func (uc *UserUsecase) CreateLoginChallenge(ctx context.Context, username string
 	return c.ID, challenge, 120, nil
 }
 
-// TODO: finish
-func (uc *UserUsecase) CompleteLogin(ctx context.Context, cmd user.CompleteLoginCommand) (userWithToken *models.UserWithToken, err error) {
+// good example to understand error handling
+func (uc *UserUsecase) CompleteLogin(ctx context.Context,
+	cmd user.CompleteLoginCommand) (userWithToken *user.LoginResponse,
+	err error) {
 
 	//fetch challenge and user
 	challenge, err := uc.repo.GetLoginChallenge(ctx, cmd.ChallengeID)
@@ -183,6 +186,8 @@ func (uc *UserUsecase) CompleteLogin(ctx context.Context, cmd user.CompleteLogin
 		uc.logger.Warn("challenge not found", "challenge_id", cmd.ChallengeID, "err", err)
 		return nil, errors.ErrInvalidChallenge
 	}
+	//not using Internal Error here because this is a client error
+	//invalid = 400
 	if challenge == nil {
 		return nil, errors.ErrInvalidChallenge
 	}
@@ -193,31 +198,227 @@ func (uc *UserUsecase) CompleteLogin(ctx context.Context, cmd user.CompleteLogin
 		return nil, errors.ErrInvalidChallenge
 	}
 
-	user, err := uc.repo.GetUserByID(ctx, challenge.UserID)
-	if err != nil || user != nil {
+	u, err := uc.repo.GetUserByID(ctx, challenge.UserID)
+	if err != nil || u == nil {
+		//why not wrapping this error? because
+		//Client asked for a user that doesn't exist → client error, not server bug
+		//Not found = 404
 		return nil, errors.ErrUserNotFound
 	}
 
-	identityKey, err := uc.repo.GetIdentityKey(ctx, user.ID)
+	identityKey, err := uc.repo.GetIdentityKey(ctx, u.ID)
 	if err != nil || identityKey == nil {
+		//why are we not returning errors.ErrIdentityKeyMissing here?
+		//because if we come till this part then it means that user exists
+		//and if the user exists and still there is no ik for him
+		//it means we had some internal error in our system therefore
+		//not returning ErrIdentityKeyMissing to client
 		return nil, errors.Internal("identity key missing")
 	}
 
 	//use user's publickKey to verify challenge
 	ok, err := utils.ValidateChallenge(identityKey.SigningPublicKey, []byte(challenge.Challenge), cmd.Signature)
-	if err != nil {
+	if err != nil || !ok {
 		return nil, errors.ErrInvalidSignature
 	}
 
-	//generate jwt tokens and share user with token
-	token, refreshToken, err := utils.GenerateJWTToken(u, uc.config)
+	//generate jwt token and share user with token
+	accessTOken, err := utils.GenerateJWTToken(u, uc.config)
 	if err != nil {
+		//if user provided a valid signature but we failed to create jwt token
+		//this means its a server error there using internal error
+		uc.logger.Error("failed to generate access token", "err", err)
 		return nil, errors.Internal("error while creating tokens")
 	}
 
-	return &models.UserWithToken{
-		User:         u,
-		Token:        token,
-		RefreshToken: refreshToken,
+	//  Mark challenge used — atomic with future refresh token save
+	if err := uc.repo.MarkChallengeUsed(ctx, cmd.ChallengeID); err != nil {
+		//if any error whille marking the challenge as used, then its error in our system
+		//therefore using internal error
+		uc.logger.Error("failed to invalidate challenge", "err", err)
+		return nil, errors.Internal("login failed")
+	}
+
+	return &user.LoginResponse{
+		AccessToken: accessTOken,
+		ExpiresIn:   1800,
+		TokenType:   "Bearer",
+		User: &user.UserDTO{
+			ID:          u.ID,
+			Username:    u.Username,
+			DisplayName: u.Name,
+		},
 	}, nil
+}
+
+func (uc *UserUsecase) UploadPreKeys(ctx context.Context, userID uuid.UUID,
+	cmd user.UploadPreKeysCommand) error {
+
+	user, err := uc.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return errors.ErrUserNotFound
+	}
+	identityKey, err := uc.repo.GetIdentityKey(ctx, userID)
+	if err != nil || identityKey == nil {
+		return errors.Internal("identity key missing")
+	}
+
+	//process spk only if provided
+	if cmd.SignedPreKey != nil {
+		spkPub, err := decodeBase64(string(cmd.SignedPreKey.PublicKey), 32)
+		if err != nil {
+			return errors.ErrInvalidSignedPreKey
+		}
+		spkSig, err := decodeBase64(string(cmd.SignedPreKey.Signature), 32)
+		if err != nil {
+			return errors.ErrInvalidSignedPreKey
+		}
+		signedPreKey := &models.SignedPreKey{
+			UserID:    user.ID,
+			KeyID:     cmd.SignedPreKey.KeyID,
+			PublicKey: spkPub,
+			Signature: spkSig,
+		}
+
+		//verify spk before saving
+		if !ed25519.Verify(identityKey.SigningPublicKey, spkPub, spkSig) {
+			return errors.ErrInvalidSignedPreKeySignature
+		}
+
+		err = uc.repo.UpsertSignedPreKey(ctx, signedPreKey)
+		if err != nil {
+			return errors.Wrap(errors.CodeInternal, "failed to save signed prekey", err)
+		}
+	}
+
+	// Process One-Time PreKeys (if any)
+	if len(cmd.OneTimePreKeys) > 0 {
+		seenKeyIDs := make(map[uint32]bool)
+		otpkList := make([]models.OneTimePreKey, 0, len(cmd.OneTimePreKeys))
+
+		for _, k := range cmd.OneTimePreKeys {
+			if seenKeyIDs[k.KeyID] {
+				return errors.ErrInvalidOneTimePreKey
+			}
+			seenKeyIDs[k.KeyID] = true
+
+			pub, err := decodeBase64(string(k.PublicKey), 32)
+			if err != nil {
+				return errors.ErrInvalidOneTimePreKey
+			}
+
+			otpkList = append(otpkList, models.OneTimePreKey{
+				UserID:    userID,
+				KeyID:     k.KeyID,
+				PublicKey: pub,
+			})
+		}
+
+		if err := uc.repo.UploadOneTimePreKeys(ctx, userID, otpkList); err != nil {
+			return errors.Wrap(errors.CodeInternal, "failed to upload one-time prekeys", err)
+		}
+	}
+	return nil
+}
+
+func (uc *UserUsecase) GetPreKeyBundle(ctx context.Context, targetUserID uuid.UUID) (*user.PreKeyBundleDTO, error) {
+
+	preKeyBundle, err := uc.repo.FetchPreKeyBundle(ctx, targetUserID)
+	if err != nil || preKeyBundle == nil {
+		if e.Is(err, repository.ErrUserNotFound) || e.Is(err, repository.ErrNoPreKeysAvailable) {
+			//not found = 404 here, not client bad request (400)
+			return nil, errors.NotFound("user or prekey bundle not available")
+		}
+		return nil, err
+	}
+
+	return &user.PreKeyBundleDTO{
+		UserID:                targetUserID,
+		IdentityKey:           preKeyBundle.IdentityKey,
+		SignedPreKeyID:        preKeyBundle.SignedPreKeyID,
+		SignedPreKey:          preKeyBundle.SignedPreKey,
+		SignedPreKeySignature: preKeyBundle.SignedPreKeySig,
+		OneTimePreKeyID:       preKeyBundle.OneTimePreKeyID,
+		OneTimePreKey:         preKeyBundle.OneTimePreKey,
+	}, nil
+}
+
+func (uc *UserUsecase) GetPreKeyBundleByUsername(ctx context.Context, username string) (*user.PreKeyBundleDTO, error) {
+
+	preKeyBundle, err := uc.repo.FetchPreKeyBundleByUsername(ctx, username)
+
+	if err != nil || preKeyBundle == nil {
+		if e.Is(err, repository.ErrUserNotFound) || e.Is(err, repository.ErrNoPreKeysAvailable) {
+			//not found = 404
+			return nil, errors.NotFound("user or prekey bundle not available")
+		}
+		return nil, err
+	}
+
+	return &user.PreKeyBundleDTO{
+		UserID:                preKeyBundle.UserID,
+		IdentityKey:           preKeyBundle.IdentityKey,
+		SignedPreKeyID:        preKeyBundle.SignedPreKeyID,
+		SignedPreKey:          preKeyBundle.SignedPreKey,
+		SignedPreKeySignature: preKeyBundle.SignedPreKeySig,
+		OneTimePreKeyID:       preKeyBundle.OneTimePreKeyID,
+		OneTimePreKey:         preKeyBundle.OneTimePreKey,
+	}, nil
+}
+
+func (uc *UserUsecase) GetRemainingOneTimePreKeysCount(ctx context.Context, userID uuid.UUID) (int, error) {
+
+	count, err := uc.repo.CountRemainingOneTimePreKeys(ctx, userID)
+	if err != nil {
+		uc.logger.Error("failed to count remaining one-time prekeys", "user_id", userID, "err", err)
+		return 0, errors.Internal("failed to count prekeys")
+	}
+	return count, nil
+}
+
+func (uc *UserUsecase) GetUserProfile(ctx context.Context, userID uuid.UUID) (*user.UserProfileDTO, error) {
+	u, err := uc.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, errors.ErrUserNotFound
+	}
+
+	return &user.UserProfileDTO{
+		ID:          u.ID,
+		Username:    u.Username,
+		DisplayName: u.Name,
+	}, nil
+}
+
+func (uc *UserUsecase) GetUserProfileByUsername(ctx context.Context, username string) (*user.UserProfileDTO, error) {
+	u, err := uc.repo.GetUserByUsername(ctx, username)
+	if err != nil {
+		return nil, errors.ErrUserNotFound
+	}
+	return &user.UserProfileDTO{
+		ID:          u.ID,
+		Username:    u.Username,
+		DisplayName: u.Name,
+	}, nil
+}
+
+func (uc *UserUsecase) SearchUsers(ctx context.Context, query string, limit int) ([]*user.UserProfileDTO, error) {
+	if query == "" {
+		return nil, errors.InvalidArg("query cannot be empty")
+	}
+
+	results, err := uc.repo.SearchUsersByUsername(ctx, query, limit)
+	if err != nil {
+		uc.logger.Error("user search failed", "query", query, "err", err)
+		return nil, errors.Internal("search failed")
+	}
+
+	dtos := make([]*user.UserProfileDTO, len(results))
+	for i, u := range results {
+		dtos[i] = &user.UserProfileDTO{
+			ID:          u.ID,
+			Username:    u.Username,
+			DisplayName: u.Name,
+		}
+	}
+	return dtos, nil
 }

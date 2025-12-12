@@ -20,6 +20,7 @@ type User struct {
 }
 
 type PreKeyBundle struct {
+	UserID          uuid.UUID
 	IdentityKey     []byte
 	SignedPreKey    []byte
 	SignedPreKeyID  uint32
