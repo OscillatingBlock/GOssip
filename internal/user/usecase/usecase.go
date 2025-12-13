@@ -22,85 +22,92 @@ import (
 )
 
 type UserUsecase struct {
-	repo   repository.UserRepository
+	repo   user.UserRepository
 	logger logger.Logger
 	config config.Config
 }
 
-func NewUserUsecase(repo repository.UserRepository, logger logger.Logger, config config.Config) *UserUsecase {
+func NewUserUsecase(repo user.UserRepository, logger logger.Logger, config config.Config) *UserUsecase {
 	return &UserUsecase{repo: repo, logger: logger, config: config}
 }
 
-func (uc *UserUsecase) Register(ctx context.Context, cmd user.RegisterCommand) (*user.UserDTO, error) {
+func (uc *UserUsecase) Register(
+	ctx context.Context,
+	cmd user.RegisterCommand,
+) (*user.UserDTO, error) {
+	//NOTE: remember base64 decoding encoding happening in handler
+
 	if err := validateUsername(cmd.Username); err != nil {
-		return nil, err
+		return nil, errors.ErrInvalidDisplayName
 	}
 	if cmd.DisplayName == "" {
 		return nil, errors.InvalidArg("display name is required")
 	}
 
-	if exists, err := uc.repo.UsernameExists(ctx, cmd.Username); err != nil {
+	exists, err := uc.repo.UsernameExists(ctx, cmd.Username)
+	if err != nil {
 		uc.logger.Error("database error checking username", "err", err)
 		return nil, errors.Internal("internal server error")
-	} else if exists {
-		return nil, errors.AlreadyExists("username is already taken")
+	}
+	if exists {
+		return nil, errors.ErrInvalidUsername
 	}
 
-	identityPub, err := decodeBase64(string(cmd.IdentityKeyPublic), ed25519.PublicKeySize)
-	if err != nil {
-		return nil, errors.InvalidArg("invalid identity key: " + err.Error())
+	if len(cmd.IdentityKeyPublic) != ed25519.PublicKeySize {
+		return nil, errors.InvalidArg("invalid identity key length")
 	}
-
-	encryptionPub, err := decodeBase64(string(cmd.EncryptionPublicKey), 32) // X25519 is 32 bytes
-	if err != nil {
-		return nil, errors.InvalidArg("invalid encryption key: " + err.Error())
+	if len(cmd.EncryptionPublicKey) != 32 {
+		return nil, errors.InvalidArg("invalid encryption key length")
 	}
-
-	signedPreKeyPub, err := decodeBase64(string(cmd.SignedPreKey.PublicKey), 32)
-	if err != nil {
+	if len(cmd.SignedPreKey.PublicKey) != 32 {
+		return nil, errors.ErrInvalidSignedPreKey
+	}
+	if len(cmd.SignedPreKey.Signature) != ed25519.SignatureSize {
 		return nil, errors.ErrInvalidSignedPreKey
 	}
 
-	if !ed25519.Verify(identityPub, signedPreKeyPub, cmd.SignedPreKey.Signature) {
-		return nil, errors.InvalidArg("signed prekey signature invalid")
+	if !ed25519.Verify(cmd.IdentityKeyPublic, cmd.SignedPreKey.PublicKey, cmd.SignedPreKey.Signature) {
+		return nil, errors.ErrInvalidSignedPreKeySignature
 	}
 
-	otpkList := make([]models.OneTimePreKey, 0, len(cmd.OneTimePreKeys))
 	seenKeyIDs := make(map[uint32]bool)
+	otpkList := make([]models.OneTimePreKey, 0, len(cmd.OneTimePreKeys))
 	for _, k := range cmd.OneTimePreKeys {
 		if seenKeyIDs[k.KeyID] {
 			return nil, errors.InvalidArg("duplicate one-time prekey ID")
 		}
 		seenKeyIDs[k.KeyID] = true
 
-		pub, err := decodeBase64(string(k.PublicKey), 32)
-		if err != nil {
+		if len(k.PublicKey) != 32 {
 			return nil, errors.ErrInvalidOneTimePreKey
 		}
+
 		otpkList = append(otpkList, models.OneTimePreKey{
-			UserID:    uuid.Nil,
 			KeyID:     k.KeyID,
-			PublicKey: pub,
+			PublicKey: k.PublicKey,
 		})
 	}
 
-	spk := &models.SignedPreKey{
-		KeyID:     cmd.SignedPreKey.KeyID,
-		Signature: cmd.SignedPreKey.Signature,
-		PublicKey: signedPreKeyPub,
-	}
-	ik := &models.IdentityKey{
-		EncryptionPublicKey: encryptionPub,
-		SigningPublicKey:    identityPub,
-	}
 	u := &models.User{
 		Username: cmd.Username,
 		Name:     cmd.DisplayName,
 	}
+
+	ik := &models.IdentityKey{
+		SigningPublicKey:    cmd.IdentityKeyPublic,
+		EncryptionPublicKey: cmd.EncryptionPublicKey,
+	}
+
+	spk := &models.SignedPreKey{
+		KeyID:     cmd.SignedPreKey.KeyID,
+		PublicKey: cmd.SignedPreKey.PublicKey,
+		Signature: cmd.SignedPreKey.Signature,
+	}
+
 	err = uc.repo.RegisterUserWithKeys(ctx, u, ik, spk, otpkList)
 	if err != nil {
-		uc.logger.Errorf("error while saving user in db: %v", err)
-		return nil, errors.ErrRegistrationFailed(errors.Internal("database error"))
+		uc.logger.Error("registration failed", "username", cmd.Username, "err", err)
+		return nil, errors.ErrRegistrationFailed(err)
 	}
 
 	return &user.UserDTO{
@@ -183,7 +190,12 @@ func (uc *UserUsecase) CompleteLogin(ctx context.Context,
 	//fetch challenge and user
 	challenge, err := uc.repo.GetLoginChallenge(ctx, cmd.ChallengeID)
 	if err != nil {
-		uc.logger.Warn("challenge not found", "challenge_id", cmd.ChallengeID, "err", err)
+		//first check for 404
+		if e.Is(err, repository.ErrLoginChallengeNotFound) {
+			return nil, errors.ErrChallengeNotFound
+		}
+		//then invalid (400)
+		uc.logger.Errorf("fetch login challenge: %v", err)
 		return nil, errors.ErrInvalidChallenge
 	}
 	//not using Internal Error here because this is a client error
@@ -200,9 +212,6 @@ func (uc *UserUsecase) CompleteLogin(ctx context.Context,
 
 	u, err := uc.repo.GetUserByID(ctx, challenge.UserID)
 	if err != nil || u == nil {
-		//why not wrapping this error? because
-		//Client asked for a user that doesn't exist → client error, not server bug
-		//Not found = 404
 		return nil, errors.ErrUserNotFound
 	}
 
@@ -217,7 +226,7 @@ func (uc *UserUsecase) CompleteLogin(ctx context.Context,
 	}
 
 	//use user's publickKey to verify challenge
-	ok, err := utils.ValidateChallenge(identityKey.SigningPublicKey, []byte(challenge.Challenge), cmd.Signature)
+	ok, err := utils.ValidateChallenge([]byte(identityKey.SigningPublicKey), []byte(challenge.Challenge), cmd.Signature)
 	if err != nil || !ok {
 		return nil, errors.ErrInvalidSignature
 	}

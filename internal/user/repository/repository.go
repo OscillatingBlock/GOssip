@@ -20,10 +20,11 @@ type UserRepository struct {
 }
 
 var (
-	ErrNoPreKeysAvailable   = errors.New("no one-time prekeys available")
-	ErrUserNotFound         = errors.New("user not found")
-	ErrIdentityKeyNotFound  = errors.New("identity key not found")
-	ErrSignedPreKeyNotFound = errors.New("signed prekey not found")
+	ErrNoPreKeysAvailable     = errors.New("no one-time prekeys available")
+	ErrUserNotFound           = errors.New("user not found")
+	ErrIdentityKeyNotFound    = errors.New("identity key not found")
+	ErrSignedPreKeyNotFound   = errors.New("signed prekey not found")
+	ErrLoginChallengeNotFound = errors.New("login challenge not found")
 )
 
 func NewUserRepository(db *bun.DB, logger logger.Logger) *UserRepository {
@@ -231,7 +232,10 @@ func (r *UserRepository) GetLoginChallenge(ctx context.Context, challengeID uuid
 	challenge := new(User.LoginChallenge)
 	err := r.db.NewSelect().Model(challenge).Where("id = ?", challengeID).Scan(ctx)
 	if err != nil {
-		return nil, errors.Wrap(err, "authRepo.GetLoginChallenge.Scan: ")
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrLoginChallengeNotFound
+		}
+		return nil, fmt.Errorf("login challenge not found: %w", err)
 	}
 	return challenge, nil
 }

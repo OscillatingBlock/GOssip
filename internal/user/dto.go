@@ -4,6 +4,8 @@ import (
 	"github.com/google/uuid"
 )
 
+// NOTE: commands travel from handler to usecase
+// Note: DTO travels from usecase to handler
 // Input commands
 type RegisterCommand struct {
 	Username            string

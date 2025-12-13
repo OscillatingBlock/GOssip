@@ -1,3 +1,4 @@
+//go:generate mockgen -source=repository.go -destination=mocks/mock_repository.go -package=mocks
 package user
 
 import (
@@ -32,4 +33,14 @@ type UserRepository interface {
 	// Returns everything needed for X3DH in one atomic operation
 	FetchPreKeyBundle(ctx context.Context, userID uuid.UUID) (*User.PreKeyBundle, error)
 	FetchPreKeyBundleByUsername(ctx context.Context, username string) (*User.PreKeyBundle, error)
+
+	UsernameExists(ctx context.Context, username string) (bool, error)
+	RegisterUserWithKeys(
+		ctx context.Context,
+		user *User.User,
+		ik *User.IdentityKey,
+		spk *User.SignedPreKey,
+		otpks []User.OneTimePreKey,
+	) error
+	SearchUsersByUsername(ctx context.Context, query string, limit int) ([]*User.User, error)
 }
