@@ -53,3 +53,7 @@ func Internal(msg string) error {
 func FailedPrecondition(msg string) error {
 	return New(CodeFailedPrecondition, msg)
 }
+
+func Unauthenticated(msg string) error {
+	return New(CodeUnauthenticated, msg)
+}

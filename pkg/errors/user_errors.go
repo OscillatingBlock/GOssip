@@ -9,13 +9,17 @@ var (
 	ErrIdentityKeyMissing           = FailedPrecondition("identity key not registered")
 	ErrSignedPreKeyMissing          = FailedPrecondition("signed prekey not uploaded")
 	ErrNoPreKeysAvailable           = FailedPrecondition("no one-time prekeys available")
-	ErrInvalidChallenge             = InvalidArg("invalid or expired login challenge")
-	ErrInvalidSignature             = Unauthorized("signature verification failed")
-	ErrChallengeUsed                = FailedPrecondition("challenge already used")
 	ErrInvalidChallengeID           = InvalidArg("invalid challenge id")
 	ErrInvalidSignedPreKey          = InvalidArg("invalid signed prekey")
 	ErrInvalidOneTimePreKey         = InvalidArg("invalid one-time prekey")
 	ErrInvalidSignedPreKeySignature = InvalidArg("invalid signed prekey signature")
+)
+var (
+	ErrChallengeNotFound = InvalidArg("challenge not found")    // 400/404
+	ErrChallengeExpired  = InvalidArg("challenge expired")      // 400
+	ErrChallengeUsed     = InvalidArg("challenge already used") // 400
+	ErrInvalidSignature  = Unauthenticated("invalid signature") // 401
+	ErrInvalidChallenge  = InvalidArg("invalid challenge")      // generic fallback
 )
 
 func ErrPreKeyBundleFailed(cause error) error {

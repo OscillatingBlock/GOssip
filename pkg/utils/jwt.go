@@ -6,5 +6,5 @@ import (
 )
 
 func GenerateJWTToken(user *models.User, config config.Config) (token string, err error) {
-	return "", nil
+	return "sdlfaslk", nil
 }

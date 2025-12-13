@@ -1,5 +1,8 @@
 package utils
 
+import "crypto/ed25519"
+
 func ValidateChallenge(signingPubKey, challenge, signature []byte) (bool, error) {
-	return true, nil
+	ok := ed25519.Verify(signingPubKey, challenge, signature)
+	return ok, nil
 }

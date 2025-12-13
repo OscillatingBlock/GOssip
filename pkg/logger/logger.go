@@ -1,8 +1,6 @@
 package logger
 
 import (
-	"errors"
-
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gossip/config"
@@ -28,7 +26,10 @@ func NewLogger(cfg *config.Config) (*Logger, error) {
 		zapCfg = zap.NewProductionConfig()
 		zapCfg.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
 	default:
-		return nil, errors.New("invalid mode") // Invalid mode
+		zapCfg = zap.NewDevelopmentConfig()
+		zapCfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder // Colored output for console
+		zapCfg.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
+
 	}
 
 	// Build the logger
