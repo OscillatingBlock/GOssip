@@ -274,21 +274,21 @@ func (uc *UserUsecase) UploadPreKeys(ctx context.Context, userID uuid.UUID,
 
 	//process spk only if provided
 	if cmd.SignedPreKey != nil {
-		spkPub, err := decodeBase64(string(cmd.SignedPreKey.PublicKey), 32)
-		if err != nil {
-			return errors.ErrInvalidSignedPreKey
-		}
-		spkSig, err := decodeBase64(string(cmd.SignedPreKey.Signature), 32)
-		if err != nil {
-			return errors.ErrInvalidSignedPreKey
-		}
+		spkPub := cmd.SignedPreKey.PublicKey
+		spkSig := cmd.SignedPreKey.Signature
+
 		signedPreKey := &models.SignedPreKey{
 			UserID:    user.ID,
 			KeyID:     cmd.SignedPreKey.KeyID,
 			PublicKey: spkPub,
 			Signature: spkSig,
 		}
-
+		if len(cmd.SignedPreKey.PublicKey) != 32 {
+			return errors.ErrInvalidSignedPreKey
+		}
+		if len(cmd.SignedPreKey.Signature) != ed25519.SignatureSize {
+			return errors.ErrInvalidSignedPreKey
+		}
 		//verify spk before saving
 		if !ed25519.Verify(identityKey.SigningPublicKey, spkPub, spkSig) {
 			return errors.ErrInvalidSignedPreKeySignature
@@ -305,17 +305,15 @@ func (uc *UserUsecase) UploadPreKeys(ctx context.Context, userID uuid.UUID,
 		seenKeyIDs := make(map[uint32]bool)
 		otpkList := make([]models.OneTimePreKey, 0, len(cmd.OneTimePreKeys))
 
-		for _, k := range cmd.OneTimePreKeys {
+		for i, k := range cmd.OneTimePreKeys {
 			if seenKeyIDs[k.KeyID] {
 				return errors.ErrInvalidOneTimePreKey
 			}
-			seenKeyIDs[k.KeyID] = true
-
-			pub, err := decodeBase64(string(k.PublicKey), 32)
-			if err != nil {
+			if len(k.PublicKey) != ed25519.PublicKeySize {
 				return errors.ErrInvalidOneTimePreKey
 			}
-
+			seenKeyIDs[k.KeyID] = true
+			pub := cmd.OneTimePreKeys[i].PublicKey
 			otpkList = append(otpkList, models.OneTimePreKey{
 				UserID:    userID,
 				KeyID:     k.KeyID,

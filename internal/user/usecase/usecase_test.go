@@ -363,3 +363,102 @@ func Test_CreateLoginChallenge(t *testing.T) {
 		assert.IsType(t, uuid.Nil, cID)
 	})
 }
+
+func Test_UploadPreKeys(t *testing.T) {
+
+	userID := uuid.New()
+	pubKey, privKey, _ := ed25519.GenerateKey(nil)
+
+	validUser := &models.User{
+		ID:        userID,
+		Username:  "testuser",
+		Name:      "Test User",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	validIdentityKey := &models.IdentityKey{
+		SigningPublicKey:    pubKey,
+		EncryptionPublicKey: pubKey,
+	}
+
+	signedPreKeyPub := pubKey
+	signature := ed25519.Sign(privKey, signedPreKeyPub)
+
+	validSignedPreKey := &user.SignedPreKeyUpload{
+		KeyID:     uuid.New().ID(),
+		PublicKey: signedPreKeyPub,
+		Signature: signature,
+	}
+
+	otpksList := make([]user.OneTimePreKeyUpload, 4)
+	for i := range otpksList {
+		otpksList[i] = user.OneTimePreKeyUpload{
+			KeyID:     uint32(i + 1000),
+			PublicKey: pubKey,
+		}
+	}
+
+	cmd := user.UploadPreKeysCommand{
+		SignedPreKey:   validSignedPreKey,
+		OneTimePreKeys: otpksList,
+	}
+
+	cfg := config.Config{}
+	logger, _ := logger.NewLogger(&cfg)
+
+	t.Run("happy path- valid spk and otpks", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockUserRepository(ctrl)
+
+		uc := NewUserUsecase(mockRepo, *logger, cfg)
+		g := mockRepo.EXPECT()
+
+		g.GetUserByID(gomock.Any(), gomock.Any()).Return(validUser, nil)
+		g.GetIdentityKey(gomock.Any(), gomock.Any()).Return(validIdentityKey, nil)
+		g.UpsertSignedPreKey(gomock.Any(), gomock.Any()).Return(nil)
+		g.UploadOneTimePreKeys(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+
+		err := uc.UploadPreKeys(t.Context(), userID, cmd)
+		require.NoError(t, err)
+	})
+
+	t.Run("sad path- invalid spk signature", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockUserRepository(ctrl)
+
+		uc := NewUserUsecase(mockRepo, *logger, cfg)
+		g := mockRepo.EXPECT()
+
+		invalidCmd := cmd
+		anotherPubKey, _, _ := ed25519.GenerateKey(nil)
+		invalidCmd.SignedPreKey.PublicKey = anotherPubKey
+
+		g.GetUserByID(gomock.Any(), gomock.Any()).Return(validUser, nil)
+		g.GetIdentityKey(gomock.Any(), gomock.Any()).Return(validIdentityKey, nil)
+
+		err := uc.UploadPreKeys(t.Context(), userID, invalidCmd)
+		require.Error(t, err)
+		assert.Equal(t, err, appErrors.ErrInvalidSignedPreKeySignature)
+	})
+
+	t.Run("sad path- inalid otpksList", func(t *testing.T) {
+
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockUserRepository(ctrl)
+
+		uc := NewUserUsecase(mockRepo, *logger, cfg)
+		g := mockRepo.EXPECT()
+
+		g.GetUserByID(gomock.Any(), gomock.Any()).Return(validUser, nil)
+		g.GetIdentityKey(gomock.Any(), gomock.Any()).Return(validIdentityKey, nil)
+		g.UpsertSignedPreKey(gomock.Any(), gomock.Any()).Return(nil)
+
+		invalidCmd := cmd
+		invalidCmd.OneTimePreKeys[0].PublicKey = []byte("invalid key")
+		err := uc.UploadPreKeys(t.Context(), userID, invalidCmd)
+		require.Error(t, err)
+
+		assert.Equal(t, appErrors.ErrInvalidOneTimePreKey, err)
+	})
+}
