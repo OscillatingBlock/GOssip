@@ -423,6 +423,32 @@ func Test_UploadPreKeys(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("happy path- no spk, only otpks", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockUserRepository(ctrl)
+
+		uc := NewUserUsecase(mockRepo, *logger, cfg)
+		g := mockRepo.EXPECT()
+
+		g.GetUserByID(gomock.Any(), gomock.Any()).Return(validUser, nil)
+		g.GetIdentityKey(gomock.Any(), gomock.Any()).Return(validIdentityKey, nil)
+		g.UploadOneTimePreKeys(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+
+		newOtpksList := make([]user.OneTimePreKeyUpload, 4)
+		for i := range newOtpksList {
+			newOtpksList[i] = user.OneTimePreKeyUpload{
+				KeyID:     uint32(i + 1000),
+				PublicKey: pubKey,
+			}
+		}
+		cmd := user.UploadPreKeysCommand{
+			OneTimePreKeys: newOtpksList,
+		}
+
+		err := uc.UploadPreKeys(t.Context(), userID, cmd)
+		require.NoError(t, err, "required no error")
+	})
+
 	t.Run("sad path- invalid spk signature", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockRepo := mocks.NewMockUserRepository(ctrl)
@@ -452,13 +478,96 @@ func Test_UploadPreKeys(t *testing.T) {
 
 		g.GetUserByID(gomock.Any(), gomock.Any()).Return(validUser, nil)
 		g.GetIdentityKey(gomock.Any(), gomock.Any()).Return(validIdentityKey, nil)
-		g.UpsertSignedPreKey(gomock.Any(), gomock.Any()).Return(nil)
 
-		invalidCmd := cmd
-		invalidCmd.OneTimePreKeys[0].PublicKey = []byte("invalid key")
-		err := uc.UploadPreKeys(t.Context(), userID, invalidCmd)
+		newOtpksList := make([]user.OneTimePreKeyUpload, 4)
+		for i := range newOtpksList {
+			newOtpksList[i] = user.OneTimePreKeyUpload{
+				KeyID:     uint32(i + 1000),
+				PublicKey: pubKey,
+			}
+		}
+		newOtpksList[0].PublicKey = []byte("invalid key")
+		cmd := user.UploadPreKeysCommand{
+			OneTimePreKeys: newOtpksList,
+		}
+
+		err := uc.UploadPreKeys(t.Context(), userID, cmd)
 		require.Error(t, err)
 
 		assert.Equal(t, appErrors.ErrInvalidOneTimePreKey, err)
 	})
 }
+
+// func Test_GetPreKeyBundle(t *testing.T) {
+// 	userID := uuid.New()
+
+// 	cfg := config.Config{}
+// 	logger, _ := logger.NewLogger(&cfg)
+
+// 	t.Run("happy path- user exists", func(t *testing.T) {
+// 		ctrl := gomock.NewController(t)
+// 		mockRepo := mocks.NewMockUserRepository(ctrl)
+
+// 		uc := NewUserUsecase(mockRepo, *logger, cfg)
+// 		g := mockRepo.EXPECT()
+// 		otpkID := uint32(1001)
+
+// 		expectedBundle := &models.PreKeyBundle{
+// 			IdentityKey:     []byte("identity-key-32bytes................"),
+// 			SignedPreKeyID:  1,
+// 			SignedPreKey:    []byte("signed-prekey-32bytes..............."),
+// 			SignedPreKeySig: []byte("signature-64bytes..................."),
+// 			OneTimePreKeyID: &otpkID,
+// 			OneTimePreKey:   []byte("otpk-32bytes........................"),
+// 		}
+// 		g.FetchPreKeyBundle(gomock.Any(), gomock.Any()).Return(expectedBundle)
+
+// 		dto, err := uc.GetPreKeyBundle(context.Background(), userID)
+// 		if err != nil {
+// 			t.Fatalf("expected no error, got %v", err)
+// 		}
+
+// 		assert.NotNil(t, dto, "expected dto ")
+// 		assert.Equal(t, userID, dto.UserID, "expected same userID")
+// 		assert.NotNil(t, dto.OneTimePreKeyID, "expected otpkID")
+// 	})
+
+// 	t.Run("happy path- bundle without otpk", func(t *testing.T) {
+// 		ctrl := gomock.NewController(t)
+// 		mockRepo := mocks.NewMockUserRepository(ctrl)
+// 		uc := NewUserUsecase(mockRepo, *logger, cfg)
+
+// 		expectedBundle := &models.PreKeyBundle{
+// 			IdentityKey:     []byte("identity-32........................."),
+// 			SignedPreKeyID:  1,
+// 			SignedPreKey:    []byte("spk-32.............................."),
+// 			SignedPreKeySig: []byte("sig-64.............................."),
+// 			OneTimePreKeyID: nil,
+// 			OneTimePreKey:   nil,
+// 		}
+
+// 		mockRepo.EXPECT().FetchPreKeyBundle(gomock.Any(), userID).Return(expectedBundle, nil)
+
+// 		dto, err := uc.GetPreKeyBundle(context.Background(), userID)
+// 		require.NoError(t, err, "required no err")
+
+// 		assert.NotNil(t, dto, "expected dto")
+// 		assert.Nil(t, dto.OneTimePreKey, "expected nil otpk")
+// 		assert.Nil(t, dto.OneTimePreKeyID, "expected nil otpkID")
+// 	})
+
+// 	t.Run("happy path- user not found", func(t *testing.T) {
+// 		ctrl := gomock.NewController(t)
+// 		mockRepo := mocks.NewMockUserRepository(ctrl)
+// 		uc := NewUserUsecase(mockRepo, *logger, cfg)
+
+// 		mockRepo.EXPECT().FetchPreKeyBundle(gomock.Any(), userID).Return(nil, repository.ErrUserNotFound)
+
+// 		_, err := uc.GetPreKeyBundle(context.Background(), userID)
+// 		require.Error(t, err, "expected error")
+
+// 		if !errors.Is(err, appErrors.NotFound("")) {
+// 			t.Errorf("expected NotFound error, got %v", err)
+// 		}
+// 	})
+// }

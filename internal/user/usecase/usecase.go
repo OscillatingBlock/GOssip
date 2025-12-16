@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	e "errors"
-	"fmt"
 	"regexp"
 	"time"
 
@@ -115,17 +114,6 @@ func (uc *UserUsecase) Register(
 		Username:    u.Username,
 		DisplayName: u.Name,
 	}, nil
-}
-
-func decodeBase64(b64 string, expectedLen int) ([]byte, error) {
-	data, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return nil, err
-	}
-	if len(data) != expectedLen {
-		return nil, fmt.Errorf("expected %d bytes, got %d", expectedLen, len(data))
-	}
-	return data, nil
 }
 
 var usernameRegex = regexp.MustCompile(`^[a-z0-9_]{3,32}$`)
@@ -333,7 +321,7 @@ func (uc *UserUsecase) GetPreKeyBundle(ctx context.Context, targetUserID uuid.UU
 	preKeyBundle, err := uc.repo.FetchPreKeyBundle(ctx, targetUserID)
 	if err != nil || preKeyBundle == nil {
 		if e.Is(err, repository.ErrUserNotFound) || e.Is(err, repository.ErrNoPreKeysAvailable) {
-			//not found = 404 here, not client bad request (400)
+			//not found (404) here, not client bad request (400)
 			return nil, errors.NotFound("user or prekey bundle not available")
 		}
 		return nil, err
