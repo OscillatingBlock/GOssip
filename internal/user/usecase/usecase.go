@@ -322,7 +322,7 @@ func (uc *UserUsecase) GetPreKeyBundle(ctx context.Context, targetUserID uuid.UU
 	if err != nil || preKeyBundle == nil {
 		if e.Is(err, repository.ErrUserNotFound) || e.Is(err, repository.ErrNoPreKeysAvailable) {
 			//not found (404) here, not client bad request (400)
-			return nil, errors.NotFound("user or prekey bundle not available")
+			return nil, errors.ErrUserOrBundleNotFound
 		}
 		return nil, err
 	}
@@ -345,7 +345,7 @@ func (uc *UserUsecase) GetPreKeyBundleByUsername(ctx context.Context, username s
 	if err != nil || preKeyBundle == nil {
 		if e.Is(err, repository.ErrUserNotFound) || e.Is(err, repository.ErrNoPreKeysAvailable) {
 			//not found = 404
-			return nil, errors.NotFound("user or prekey bundle not available")
+			return nil, errors.ErrUserOrBundleNotFound
 		}
 		return nil, err
 	}
@@ -365,6 +365,9 @@ func (uc *UserUsecase) GetRemainingOneTimePreKeysCount(ctx context.Context, user
 
 	count, err := uc.repo.CountRemainingOneTimePreKeys(ctx, userID)
 	if err != nil {
+		if err == repository.ErrUserNotFound {
+			return 0, errors.ErrUserNotFound
+		}
 		uc.logger.Error("failed to count remaining one-time prekeys", "user_id", userID, "err", err)
 		return 0, errors.Internal("failed to count prekeys")
 	}
@@ -374,7 +377,10 @@ func (uc *UserUsecase) GetRemainingOneTimePreKeysCount(ctx context.Context, user
 func (uc *UserUsecase) GetUserProfile(ctx context.Context, userID uuid.UUID) (*user.UserProfileDTO, error) {
 	u, err := uc.repo.GetUserByID(ctx, userID)
 	if err != nil {
-		return nil, errors.ErrUserNotFound
+		if err == repository.ErrUserNotFound {
+			return nil, errors.ErrUserNotFound
+		}
+		return nil, errors.Internal("faield to get user profile")
 	}
 
 	return &user.UserProfileDTO{
@@ -387,7 +393,10 @@ func (uc *UserUsecase) GetUserProfile(ctx context.Context, userID uuid.UUID) (*u
 func (uc *UserUsecase) GetUserProfileByUsername(ctx context.Context, username string) (*user.UserProfileDTO, error) {
 	u, err := uc.repo.GetUserByUsername(ctx, username)
 	if err != nil {
-		return nil, errors.ErrUserNotFound
+		if err == repository.ErrUserNotFound {
+			return nil, errors.ErrUserNotFound
+		}
+		return nil, errors.Internal("faield to get user profile")
 	}
 	return &user.UserProfileDTO{
 		ID:          u.ID,
@@ -398,10 +407,17 @@ func (uc *UserUsecase) GetUserProfileByUsername(ctx context.Context, username st
 
 func (uc *UserUsecase) SearchUsers(ctx context.Context, query string, limit int) ([]*user.UserProfileDTO, error) {
 	if query == "" {
-		return nil, errors.InvalidArg("query cannot be empty")
+		return nil, errors.ErrInvalidQuery
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
 	}
 
 	results, err := uc.repo.SearchUsersByUsername(ctx, query, limit)
+	//NOTE: if no matches found repo returns []*User{}, nil (not any error like ErrUserNotFound)
 	if err != nil {
 		uc.logger.Error("user search failed", "query", query, "err", err)
 		return nil, errors.Internal("search failed")
