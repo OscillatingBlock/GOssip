@@ -13,6 +13,9 @@ var (
 	ErrInvalidSignedPreKey          = InvalidArg("invalid signed prekey")
 	ErrInvalidOneTimePreKey         = InvalidArg("invalid one-time prekey")
 	ErrInvalidSignedPreKeySignature = InvalidArg("invalid signed prekey signature")
+	ErrInvalidUserID                = InvalidArg("invalid user id")
+	ErrUserOrBundleNotFound         = NotFound("user or prekey bundle not available")
+	ErrInvalidQuery                 = InvalidArg("invalid query")
 )
 var (
 	ErrChallengeNotFound = InvalidArg("challenge not found")    // 400/404

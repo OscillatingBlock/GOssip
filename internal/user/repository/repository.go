@@ -215,6 +215,9 @@ func (r *UserRepository) ClaimOneTimePreKey(ctx context.Context, userID uuid.UUI
 func (r *UserRepository) CountRemainingOneTimePreKeys(ctx context.Context, userID uuid.UUID) (int, error) {
 	count, err := r.db.NewSelect().Model((*User.OneTimePreKey)(nil)).Where("used = false AND user_id = ?", userID).Count(ctx)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrUserNotFound
+		}
 		return 0, fmt.Errorf("count one-time prekeys failed: %w", err)
 	}
 	return count, nil
@@ -463,12 +466,7 @@ func (r *UserRepository) GetRefreshToken(ctx context.Context, tokenID uuid.UUID)
 }
 
 func (r *UserRepository) SearchUsersByUsername(ctx context.Context, query string, limit int) ([]*models.User, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 100 {
-		limit = 100
-	}
+
 	var users []*models.User
 	err := r.db.NewSelect().Model(users).Where("username ILIKE ?", query+"%").Order("username ASC").Limit(limit).Scan(ctx)
 	if err != nil {
