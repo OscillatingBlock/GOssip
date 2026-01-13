@@ -77,6 +77,9 @@ func TestUserUsecase_CompleteLogin(t *testing.T) {
 		if resp.AccessToken == "" {
 			t.Error("expected non-empty access token")
 		}
+		if resp.RefreshToken == "" {
+			t.Error("expected non-empty refresh token")
+		}
 		if resp.User == nil || resp.User.ID != userID {
 			t.Error("expected user in response")
 		}

@@ -235,13 +235,12 @@ func (uc *UserUsecase) CompleteLogin(ctx context.Context,
 		uc.logger.Error("failed to invalidate challenge", "err", err)
 		return nil, errors.Internal("login failed")
 	}
-	refreshTokenExpiryTime := 7 * 24 * 60 * 60
 
 	return &user.LoginResponse{
 		AccessToken:            accessToken,
-		AccessTokenExpiryTime:  1800,
+		AccessTokenExpiryTime:  uc.config.JWT.AccessTokenExpireTime,
 		RefreshToken:           refreshToken,
-		RefreshTokenExpiryTime: refreshTokenExpiryTime,
+		RefreshTokenExpiryTime: uc.config.JWT.RefreshTokenExpireTime,
 		TokenType:              "Bearer",
 		User: &user.UserDTO{
 			ID:          u.ID,
@@ -437,6 +436,7 @@ func (uc *UserUsecase) SearchUsers(ctx context.Context, query string, limit int)
 	return dtos, nil
 }
 
+// TODO: write tests
 func (uc *UserUsecase) RefreshToken(ctx context.Context, refreshToken string) (user.Tokens, error) {
 	var tokens user.Tokens
 	user, err := utils.ValidateRefreshToken(refreshToken, uc.config.JWT)
