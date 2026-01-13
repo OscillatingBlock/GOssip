@@ -14,6 +14,7 @@ import (
 	"gossip/internal/user/repository"
 	appErrors "gossip/pkg/errors"
 	"gossip/pkg/logger"
+	"gossip/pkg/utils"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
@@ -793,5 +794,55 @@ func TestUserUsecase_SearchUsers(t *testing.T) {
 		require.NoError(t, err)
 		_, err = uc.SearchUsers(context.Background(), "a", 200)
 		require.NoError(t, err)
+	})
+}
+
+func Test_RefreshToken(t *testing.T) {
+	config := config.Config{
+		JWT: config.JWT{
+			Secret:                 "super_strong_secret",
+			AccessTokenExpireTime:  60 * 30,
+			RefreshTokenExpireTime: 7 * 24 * 60 * 60,
+		},
+		LoggerMode: config.LoggerMode{
+			Development: true,
+			Level:       "Development",
+		},
+	}
+	logger, _ := logger.NewLogger(&config)
+
+	user := new(models.User)
+	accessToken, refreshToken, err := utils.GenerateJWTToken(user, config)
+	assert.NoError(t, err)
+
+	t.Run("happy_path_valid_refresh_token", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockUserRepository(ctrl)
+
+		uc := NewUserUsecase(mockRepo, *logger, config)
+		tokens, err := uc.RefreshToken(t.Context(), refreshToken)
+		assert.NoError(t, err)
+
+		assert.NotEqual(t, "", tokens.RefreshToken)
+		assert.NotEqual(t, "", tokens.AccessToken)
+		assert.NotEqual(t, accessToken, tokens.AccessToken, "expected new token access token")
+		assert.NotEqual(t, refreshToken, tokens.RefreshToken, "expcted new refresh token")
+		assert.Equal(t, config.JWT.AccessTokenExpireTime, tokens.AccessTokenExpiryTime)
+		assert.Equal(t, config.JWT.RefreshTokenExpireTime, tokens.RefreshTokenExpiryTime)
+	})
+
+	t.Run("sad_path_invalid_refresh_token", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockUserRepository(ctrl)
+
+		uc := NewUserUsecase(mockRepo, *logger, config)
+
+		refreshToken = "invalid token"
+		tokens, err := uc.RefreshToken(t.Context(), refreshToken)
+		assert.Error(t, err)
+
+		assert.Equal(t, err, appErrors.ErrInvalidJWTToken)
+		assert.Equal(t, "", tokens.AccessToken)
+		assert.Equal(t, "", tokens.RefreshToken)
 	})
 }
