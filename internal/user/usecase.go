@@ -12,12 +12,12 @@ type UserUsecase interface {
 	// Update display name only (username is immutable)
 	UpdateDisplayName(ctx context.Context, userID uuid.UUID, newName string) error
 
-	CreateLoginChallenge(ctx context.Context, username string) (challenge string,
-		challengeID uuid.UUID,
+	CreateLoginChallenge(ctx context.Context, username string) (challengeID uuid.UUID,
+		challenge string,
 		expiresInSeconds int,
 		err error)
 
-	CompleteLogin(ctx context.Context, cmd CompleteLoginCommand) (authToken string, user *UserDTO, err error)
+	CompleteLogin(ctx context.Context, cmd CompleteLoginCommand) (userWithToken *LoginResponse, err error)
 
 	// Upload/replace signed prekey + upload batch of one-time prekeys
 	UploadPreKeys(ctx context.Context, userID uuid.UUID, cmd UploadPreKeysCommand) error
@@ -33,4 +33,6 @@ type UserUsecase interface {
 	// Search users by username prefix (for @mentions, adding contacts, etc.)
 	//TODO
 	SearchUsers(ctx context.Context, query string, limit int) ([]*UserProfileDTO, error)
+
+	RefreshToken(ctx context.Context, refreshToken string) (Tokens, error)
 }

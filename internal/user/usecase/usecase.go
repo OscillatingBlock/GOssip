@@ -53,10 +53,10 @@ func (uc *UserUsecase) Register(
 	}
 
 	if len(cmd.IdentityKeyPublic) != ed25519.PublicKeySize {
-		return nil, errors.InvalidArg("invalid identity key length")
+		return nil, errors.ErrInvalidIdentityKey
 	}
 	if len(cmd.EncryptionPublicKey) != 32 {
-		return nil, errors.InvalidArg("invalid encryption key length")
+		return nil, errors.ErrInvalidEncryptionKey
 	}
 	if len(cmd.SignedPreKey.PublicKey) != 32 {
 		return nil, errors.ErrInvalidSignedPreKey
@@ -73,7 +73,7 @@ func (uc *UserUsecase) Register(
 	otpkList := make([]models.OneTimePreKey, 0, len(cmd.OneTimePreKeys))
 	for _, k := range cmd.OneTimePreKeys {
 		if seenKeyIDs[k.KeyID] {
-			return nil, errors.InvalidArg("duplicate one-time prekey ID")
+			return nil, errors.ErrInvalidOneTimePreKey
 		}
 		seenKeyIDs[k.KeyID] = true
 
@@ -220,7 +220,7 @@ func (uc *UserUsecase) CompleteLogin(ctx context.Context,
 	}
 
 	//generate jwt token and share user with token
-	accessTOken, err := utils.GenerateJWTToken(u, uc.config)
+	accessToken, refreshToken, err := utils.GenerateJWTToken(u, uc.config)
 	if err != nil {
 		//if user provided a valid signature but we failed to create jwt token
 		//this means its a server error there using internal error
@@ -235,11 +235,14 @@ func (uc *UserUsecase) CompleteLogin(ctx context.Context,
 		uc.logger.Error("failed to invalidate challenge", "err", err)
 		return nil, errors.Internal("login failed")
 	}
+	refreshTokenExpiryTime := 7 * 24 * 60 * 60
 
 	return &user.LoginResponse{
-		AccessToken: accessTOken,
-		ExpiresIn:   1800,
-		TokenType:   "Bearer",
+		AccessToken:            accessToken,
+		AccessTokenExpiryTime:  1800,
+		RefreshToken:           refreshToken,
+		RefreshTokenExpiryTime: refreshTokenExpiryTime,
+		TokenType:              "Bearer",
 		User: &user.UserDTO{
 			ID:          u.ID,
 			Username:    u.Username,
@@ -432,4 +435,22 @@ func (uc *UserUsecase) SearchUsers(ctx context.Context, query string, limit int)
 		}
 	}
 	return dtos, nil
+}
+
+func (uc *UserUsecase) RefreshToken(ctx context.Context, refreshToken string) (user.Tokens, error) {
+	var tokens user.Tokens
+	user, err := utils.ValidateRefreshToken(refreshToken, uc.config.JWT)
+	if err != nil {
+		return tokens, err
+	}
+	newToken, newRefreshToken, err := utils.GenerateJWTToken(user, uc.config)
+	if err != nil {
+		return tokens, err
+	}
+	tokens.AccessToken = newToken
+	tokens.RefreshTokenExpiryTime = uc.config.JWT.RefreshTokenExpireTime
+	tokens.RefreshToken = newRefreshToken
+	tokens.AccessTokenExpiryTime = uc.config.JWT.AccessTokenExpireTime
+
+	return tokens, nil
 }

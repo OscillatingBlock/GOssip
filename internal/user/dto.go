@@ -62,8 +62,18 @@ type PreKeyBundleDTO struct {
 }
 
 type LoginResponse struct {
-	AccessToken string   `json:"access_token"`
-	ExpiresIn   int      `json:"expires_in"`
-	TokenType   string   `json:"token_type"`
-	User        *UserDTO `json:"user"`
+	AccessToken            string   `json:"access_token"`
+	AccessTokenExpiryTime  int      `json:"access_token_expiry_time"`
+	RefreshToken           string   `json:"refresh_token"`
+	RefreshTokenExpiryTime int      `json:"refresh_token_expiry_time"`
+	TokenType              string   `json:"token_type"`
+	User                   *UserDTO `json:"user"`
+}
+
+type Tokens struct {
+	AccessToken            string `json:"access_token"`
+	AccessTokenExpiryTime  int    `json:"access_token_expiry_time"`
+	RefreshToken           string `json:"refresh_token"`
+	RefreshTokenExpiryTime int    `json:"refresh_token_expiry_time"`
+	TokenType              string `json:"token_type"`
 }

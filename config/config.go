@@ -30,8 +30,9 @@ type LoggerMode struct {
 }
 
 type JWT struct {
-	Secret    string
-	ExpiredIn int
+	Secret                 string
+	AccessTokenExpireTime  int
+	RefreshTokenExpireTime int
 }
 
 func LoadConfig(filename string) (*viper.Viper, error) {

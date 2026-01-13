@@ -129,7 +129,6 @@ func (r *UserRepository) UpsertSignedPreKey(ctx context.Context, spk *User.Signe
 	_, err := r.db.NewInsert().
 		Model(spk).
 		On("CONFLICT (user_id) DO UPDATE").
-		// Explicitly update the fields with the new values (EXCLUDED refers to the new data)
 		Set("key_id = EXCLUDED.key_id").
 		Set("public_key = EXCLUDED.public_key").
 		Set("signature = EXCLUDED.signature").

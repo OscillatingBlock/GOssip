@@ -134,13 +134,22 @@ func Test_GetUserByUsername(t *testing.T) {
 	user := models.User{Username: "aayush", Name: "name"}
 	repo := NewUserRepository(testDB, logger.Logger{})
 
-	err := repo.CreateUser(context.Background(), &user)
-	require.NoError(t, err)
+	t.Run("user exists", func(t *testing.T) {
+		err := repo.CreateUser(context.Background(), &user)
+		require.NoError(t, err)
 
-	fetchedUser, err := repo.GetUserByUsername(t.Context(), user.Username)
-	assert.Equal(t, user.Username, fetchedUser.Username)
-	assert.Equal(t, user.Name, fetchedUser.Name)
-	assert.NotNil(t, fetchedUser.ID)
+		fetchedUser, err := repo.GetUserByUsername(t.Context(), user.Username)
+		assert.Equal(t, user.Username, fetchedUser.Username)
+		assert.Equal(t, user.Name, fetchedUser.Name)
+		assert.NotNil(t, fetchedUser.ID)
+	})
+
+	t.Run("user does not exists", func(t *testing.T) {
+		fetchedUser, err := repo.GetUserByUsername(t.Context(), "non-existent-user")
+		require.Error(t, err)
+		assert.Equal(t, err, ErrUserNotFound)
+		assert.Nil(t, fetchedUser)
+	})
 }
 
 func Test_UpdateUserDisplayName(t *testing.T) {
@@ -188,7 +197,7 @@ func Test_IdentityKeyfuncs(t *testing.T) {
 		SigningPublicKey:    signingPub,
 		EncryptionPublicKey: encPub,
 	}
-	t.Run("get identity key by username", func(t *testing.T) {
+	t.Run("get identity key by username, happy path- user exists", func(t *testing.T) {
 		defer cleanup()
 
 		require.NoError(t, repo.SaveIdentityKey(t.Context(), ik))
@@ -199,6 +208,13 @@ func Test_IdentityKeyfuncs(t *testing.T) {
 		assert.Equal(t, fetchedIK.SigningPublicKey, signingPub)
 		assert.Equal(t, fetchedIK.EncryptionPublicKey, encPub)
 	})
+	t.Run("get ik by username, sad path- user dne", func(t *testing.T) {
+		fetchedIK, err := repo.GetIdentityKeyByUsername(t.Context(), "non-existent-user")
+		assert.Error(t, err, "expected error, user does not exist")
+		assert.Equal(t, ErrUserNotFound, err)
+		assert.Nil(t, fetchedIK)
+	})
+
 	t.Run("save identity key", func(t *testing.T) {
 		defer cleanup()
 		require.NoError(t, repo.SaveIdentityKey(t.Context(), ik))
