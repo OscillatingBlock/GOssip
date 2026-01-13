@@ -259,7 +259,7 @@ func Test_Register(t *testing.T) {
 		if err == nil {
 			t.Fatalf("expected error")
 		}
-		assert.Equal(t, err, appErrors.InvalidArg("invalid identity key length"))
+		assert.Equal(t, err, appErrors.ErrInvalidIdentityKey)
 		assert.Nil(t, userDTO)
 	})
 
